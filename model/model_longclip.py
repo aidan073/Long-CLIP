@@ -439,49 +439,32 @@ class CLIP(nn.Module):
     #     return logits_per_image, logits_per_text
 
     #rewrite forward, fix the bug of no gradient in the original concat_all_gather. Notice that torch.distributed.nn.all_gather has backward function
-    def forward(self, image, text_long,text_short,rank):
-        image_features_long = self.encode_image(image)
-        text_features_long = self.encode_text(text_long)
-        text_features_short = self.encode_text(text_short)
+    def forward(self, images, texts, rank):
+        image_features = self.encode_image(images)
+        text_features = self.encode_text(texts)
 
         # normalized features
-        image_features_long = image_features_long / image_features_long.norm(dim=1, keepdim=True)
-        text_features_long = text_features_long / text_features_long.norm(dim=1, keepdim=True)
-        text_features_short = text_features_short / text_features_short.norm(dim=1, keepdim=True)
-        image_features_short = self.PCA(image_features_long, 32)
+        image_features = image_features / image_features.norm(dim=1, keepdim=True)
+        text_features = text_features / text_features.norm(dim=1, keepdim=True)
             
-        image_feat_all_long = torch.cat(torch.distributed.nn.all_gather(image_features_long), dim=0)#gather with grad
-        image_features_all_short = torch.cat(torch.distributed.nn.all_gather(image_features_short), dim=0)
-        text_feat_all_long = torch.cat(torch.distributed.nn.all_gather(text_features_long), dim=0)
-        text_feat_all_short = torch.cat(torch.distributed.nn.all_gather(text_features_short), dim=0)
+        all_image_features = torch.cat(torch.distributed.nn.all_gather(image_features), dim=0)#gather with grad
+        all_text_features = torch.cat(torch.distributed.nn.all_gather(text_features), dim=0)
         
-        sim_i2tl = torch.matmul(image_features_long, text_feat_all_long.T)
-        sim_tl2i = torch.matmul(image_feat_all_long, text_features_long.T)
-        sim_tl2i = sim_tl2i.T
-
-        sim_i2ts = torch.matmul(image_features_short, text_feat_all_short.T)
-        sim_ts2i = torch.matmul(image_features_all_short, text_features_short.T)
-        sim_ts2i = sim_ts2i.T
+        sim_i2t = torch.matmul(image_features, all_text_features.T)
+        sim_t2i = torch.matmul(text_features, all_image_features.T)
         
-        sim_i2tl = self.logit_scale.exp() * sim_i2tl
-        sim_tl2i = self.logit_scale.exp() * sim_tl2i
+        sim_i2t = self.logit_scale.exp() * sim_i2t
+        sim_t2i = self.logit_scale.exp() * sim_t2i
 
-        sim_i2ts = self.logit_scale.exp() * sim_i2ts
-        sim_ts2i = self.logit_scale.exp() * sim_ts2i
-
-        bs = image.size(0)
-        targets = torch.linspace(rank * bs,rank * bs + bs - 1, bs, dtype=torch.long).to(image.device)
+        bs = images.size(0)
+        targets = torch.linspace(rank * bs,rank * bs + bs - 1, bs, dtype=torch.long).to(images.device)
         
-        loss_itcl = (
-                F.cross_entropy(sim_i2tl, targets, label_smoothing=0.1)
-                + F.cross_entropy(sim_tl2i, targets, label_smoothing=0.1)
+        loss = (
+                F.cross_entropy(sim_i2t, targets, label_smoothing=0.1)
+                + F.cross_entropy(sim_t2i, targets, label_smoothing=0.1)
             ) / 2
         
-        loss_itcs = (
-                F.cross_entropy(sim_i2ts, targets, label_smoothing=0.1)
-                + F.cross_entropy(sim_ts2i, targets, label_smoothing=0.1)
-            ) / 2
-        return loss_itcl, loss_itcs
+        return loss
        
 
 
