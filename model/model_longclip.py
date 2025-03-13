@@ -456,17 +456,7 @@ class CLIP(nn.Module):
         sim_i2t = self.logit_scale.exp() * sim_i2t
         sim_t2i = self.logit_scale.exp() * sim_t2i
 
-        bs = images.size(0)
-        targets = torch.linspace(rank * bs,rank * bs + bs - 1, bs, dtype=torch.long).to(images.device)
-        
-        loss = (
-                F.cross_entropy(sim_i2t, targets, label_smoothing=0.1)
-                + F.cross_entropy(sim_t2i, targets, label_smoothing=0.1)
-            ) / 2
-        
-        return loss
-       
-
+        return sim_i2t, sim_t2i # image2text similarities, text2image similarities
 
 def convert_weights(model: nn.Module):
     """Convert applicable model parameters to fp16"""
