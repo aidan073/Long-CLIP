@@ -438,15 +438,38 @@ class CLIP(nn.Module):
     #     # shape = [global_batch_size, global_batch_size]
     #     return logits_per_image, logits_per_text
 
-    #rewrite forward, fix the bug of no gradient in the original concat_all_gather. Notice that torch.distributed.nn.all_gather has backward function
-    def forward(self, images, texts, rank):
+    def forward(self, images, texts):
         image_features = self.encode_image(images)
         text_features = self.encode_text(texts)
 
         # normalized features
         image_features = image_features / image_features.norm(dim=1, keepdim=True)
         text_features = text_features / text_features.norm(dim=1, keepdim=True)
-            
+        
+        sim_i2t = torch.matmul(image_features, text_features.T)
+        sim_t2i = sim_i2t.T
+        
+        sim_i2t = self.logit_scale.exp() * sim_i2t
+        sim_t2i = self.logit_scale.exp() * sim_t2i
+
+        bs = images.size(0)
+        targets = torch.linspace(0, bs - 1, bs, dtype=torch.long).to(images.device)
+        
+        loss = (
+                F.cross_entropy(sim_i2t, targets, label_smoothing=0.1)
+                + F.cross_entropy(sim_t2i, targets, label_smoothing=0.1)
+            ) / 2
+        
+        return loss
+    
+    def distributed_forward(self, images, texts, rank):
+        image_features = self.encode_image(images)
+        text_features = self.encode_text(texts)
+
+        # normalized features
+        image_features = image_features / image_features.norm(dim=1, keepdim=True)
+        text_features = text_features / text_features.norm(dim=1, keepdim=True)
+        
         all_image_features = torch.cat(torch.distributed.nn.all_gather(image_features), dim=0)#gather with grad
         all_text_features = torch.cat(torch.distributed.nn.all_gather(text_features), dim=0)
         
@@ -456,8 +479,16 @@ class CLIP(nn.Module):
         sim_i2t = self.logit_scale.exp() * sim_i2t
         sim_t2i = self.logit_scale.exp() * sim_t2i
 
-        return sim_i2t, sim_t2i # image2text similarities, text2image similarities
-
+        bs = images.size(0)
+        targets = torch.linspace(rank * bs,rank * bs + bs - 1, bs, dtype=torch.long).to(images.device)
+        
+        loss = (
+                F.cross_entropy(sim_i2t, targets, label_smoothing=0.1)
+                + F.cross_entropy(sim_t2i, targets, label_smoothing=0.1)
+            ) / 2
+        
+        return loss
+       
 def convert_weights(model: nn.Module):
     """Convert applicable model parameters to fp16"""
 
