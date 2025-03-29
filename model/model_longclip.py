@@ -453,7 +453,7 @@ class CLIP(nn.Module):
         sim_t2i = self.logit_scale.exp() * sim_t2i
 
         bs = images.size(0)
-        targets = torch.linspace(0, bs - 1, bs, dtype=torch.long).to(images.device)
+        targets = torch.arange(0, bs, dtype=torch.long, device=images.device)
         
         loss = (
                 F.cross_entropy(sim_i2t, targets, label_smoothing=0.1)
@@ -470,7 +470,7 @@ class CLIP(nn.Module):
         image_features = image_features / image_features.norm(dim=1, keepdim=True)
         text_features = text_features / text_features.norm(dim=1, keepdim=True)
         
-        all_image_features = torch.cat(torch.distributed.nn.all_gather(image_features), dim=0)#gather with grad
+        all_image_features = torch.cat(torch.distributed.nn.all_gather(image_features), dim=0) # Gathers with grad, effectively simulating a larger batch size for contrastive loss
         all_text_features = torch.cat(torch.distributed.nn.all_gather(text_features), dim=0)
         
         sim_i2t = torch.matmul(image_features, all_text_features.T)
@@ -480,7 +480,7 @@ class CLIP(nn.Module):
         sim_t2i = self.logit_scale.exp() * sim_t2i
 
         bs = images.size(0)
-        targets = torch.linspace(rank * bs,rank * bs + bs - 1, bs, dtype=torch.long).to(images.device)
+        targets = torch.arange(rank * bs, (rank + 1) * bs, dtype=torch.long, device=images.device)
         
         loss = (
                 F.cross_entropy(sim_i2t, targets, label_smoothing=0.1)
